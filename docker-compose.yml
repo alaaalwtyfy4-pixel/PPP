@@ -1,0 +1,145 @@
+# =============================================================================
+# Agency Marketing OS — Docker Compose
+# Orchestrates: nginx, backend (FastAPI), frontend (Next.js), postgres, redis
+# 
+# Webhook Tunneling Configuration:
+#   - Backend exposed on 0.0.0.0:8000 for ngrok tunneling
+#   - Nginx exposed on 0.0.0.0 for external access
+#   - extra_hosts enables host.docker.internal for containers to reach host
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — Primary database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: agencyos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agencyos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-production}
+      POSTGRES_DB: ${POSTGRES_DB:-agency_os}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agencyos} -d ${POSTGRES_DB:-agency_os}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - agencyos-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — Cache & background task queue
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: agencyos-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - agencyos-net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI Backend
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: agencyos-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-agencyos}:${POSTGRES_PASSWORD:-change-me-in-production}@postgres:5432/${POSTGRES_DB:-agency_os}
+      REDIS_URL: redis://redis:6379/0
+      BACKEND_URL: "${BACKEND_URL:-http://localhost:8000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend-logs:/app/logs
+    ports:
+      - "0.0.0.0:8000:8000"              # ← CHANGED: accessible from host + external (ngrok)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # ← ADDED: backend can reach host
+    networks:
+      - agencyos-net
+
+  # ---------------------------------------------------------------------------
+  # Next.js Frontend
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: agencyos-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+    depends_on:
+      - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # ← ADDED: frontend can reach host
+    networks:
+      - agencyos-net
+    # No port exposed to host — only accessible through nginx
+
+  # ---------------------------------------------------------------------------
+  # Nginx — Reverse Proxy
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: agencyos-nginx
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:80:80"                  # ← CHANGED: accessible from host + external (ngrok)
+      - "0.0.0.0:443:443"                # ← CHANGED: accessible from host + external (ngrok)
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+      - frontend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # ← ADDED: nginx can reach host
+    networks:
+      - agencyos-net
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  pgdata:
+    name: agencyos-pgdata
+  redisdata:
+    name: agencyos-redisdata
+  backend-logs:
+    name: agencyos-backend-logs
+
+# =============================================================================
+# Internal Network
+# =============================================================================
+networks:
+  agencyos-net:
+    name: agencyos-net
+    driver: bridge

@@ -1,0 +1,27 @@
+# =============================================================================
+# Agency Marketing OS — Iraqi E-Commerce Backend
+# Part 1: Core Dependencies
+# =============================================================================
+
+# Web Framework
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.34.0
+
+# Async PostgreSQL
+sqlalchemy[asyncio]>=2.0.35
+asyncpg>=0.30.0
+alembic>=1.14.0
+
+# Configuration & Validation
+pydantic-settings>=2.7.0
+pydantic>=2.0.0
+
+# Security (Token Encryption at Rest)
+cryptography>=44.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+httpx>=0.28.0          # async HTTP for Meta/TikTok/Telegram API calls
+
+# AI / LLM — Iraqi Dialect Parser
+google-genai>=1.0.0
